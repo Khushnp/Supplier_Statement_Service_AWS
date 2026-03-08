@@ -12,15 +12,17 @@ Production-ready C# console application targeting **.NET Framework 4.8** to extr
 1. Prompt for full file path.
 2. Validate input and detect file type.
 3. Convert Excel/CSV to temporary PDF (Interop first, open-source fallback).
-4. Send PDF/image to AWS Textract (`AnalyzeDocument` with `TABLES` + `FORMS`).
-5. Parse extracted data into structured JSON.
-6. Print JSON to console and save `<inputfilename>.json` next to source file.
+4. Send image to AWS Textract (`AnalyzeDocument` with `TABLES` + `FORMS`).
+5. For PDF/TIFF, use Textract async analysis (`StartDocumentAnalysis` + polling) via S3 fallback.
+6. Parse extracted data into structured JSON.
+7. Print JSON to console and save `<inputfilename>.json` next to source file.
 
 ## AWS configuration
 Set environment variables before running:
 - `AWS_ACCESS_KEY`
 - `AWS_SECRET_KEY`
 - `AWS_REGION`
+- `AWS_TEXTRACT_S3_BUCKET` (required for PDF/TIFF async flow)
 
 ## Project structure
 - `Program.cs` - Console workflow and output handling.
