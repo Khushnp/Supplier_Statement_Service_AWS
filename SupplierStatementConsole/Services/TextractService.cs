@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using Amazon;
 using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
+using Amazon.S3.Util;
 using Amazon.Textract;
 using Amazon.Textract.Model;
 
@@ -15,7 +17,9 @@ namespace SupplierStatementConsole.Services
     {
         private readonly AmazonTextractClient _client;
         private readonly AmazonS3Client _s3Client;
-        private readonly string _fallbackBucket;
+        private readonly string _configuredFallbackBucket;
+        private readonly string _regionSystemName;
+        private readonly string _accessKey;
 
         public TextractService()
         {
@@ -32,7 +36,9 @@ namespace SupplierStatementConsole.Services
             var regionEndpoint = RegionEndpoint.GetBySystemName(region);
             _client = new AmazonTextractClient(credentials, regionEndpoint);
             _s3Client = new AmazonS3Client(credentials, regionEndpoint);
-            _fallbackBucket = Environment.GetEnvironmentVariable("AWS_TEXTRACT_S3_BUCKET") ?? string.Empty;
+            _configuredFallbackBucket = Environment.GetEnvironmentVariable("AWS_TEXTRACT_S3_BUCKET") ?? string.Empty;
+            _regionSystemName = region;
+            _accessKey = accessKey;
         }
 
         public async Task<AnalyzeDocumentResponse> AnalyzeDocumentAsync(string filePath)
@@ -49,23 +55,12 @@ namespace SupplierStatementConsole.Services
 
             try
             {
-                // First attempt sync AnalyzeDocument(Bytes) for all formats.
-                // This keeps PDF/TIFF support working when the document is compatible
-                // and no S3 bucket is configured.
                 return await AnalyzeWithBytesAsync(filePath).ConfigureAwait(false);
             }
             catch (AmazonTextractException textractEx) when (isPdfOrTiff && IsUnsupportedDocumentError(textractEx))
             {
-                // Only fallback to async S3-based flow for PDF/TIFF if we hit unsupported format.
-                if (string.IsNullOrWhiteSpace(_fallbackBucket))
-                {
-                    throw new InvalidOperationException(
-                        "Textract reported unsupported PDF/TIFF format for AnalyzeDocument(Bytes). " +
-                        "Set AWS_TEXTRACT_S3_BUCKET (same region as AWS_REGION) to enable async fallback via StartDocumentAnalysis.",
-                        textractEx);
-                }
-
-                return await AnalyzeViaStartDocumentAnalysisAsync(filePath).ConfigureAwait(false);
+                var fallbackBucket = await ResolveFallbackBucketAsync().ConfigureAwait(false);
+                return await AnalyzeViaStartDocumentAnalysisAsync(filePath, fallbackBucket).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -103,14 +98,80 @@ namespace SupplierStatementConsole.Services
             return (ex.Message ?? string.Empty).IndexOf("unsupported document format", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private async Task<AnalyzeDocumentResponse> AnalyzeViaStartDocumentAnalysisAsync(string filePath)
+        private async Task<string> ResolveFallbackBucketAsync()
+        {
+            if (!string.IsNullOrWhiteSpace(_configuredFallbackBucket))
+            {
+                return _configuredFallbackBucket;
+            }
+
+            var generatedName = GenerateDefaultBucketName();
+            try
+            {
+                if (!await AmazonS3Util.DoesS3BucketExistV2Async(_s3Client, generatedName).ConfigureAwait(false))
+                {
+                    var createRequest = new PutBucketRequest
+                    {
+                        BucketName = generatedName,
+                        UseClientRegion = true
+                    };
+
+                    // us-east-1 expects no explicit location configuration.
+                    if (!string.Equals(_regionSystemName, "us-east-1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        createRequest.BucketRegionName = _regionSystemName;
+                    }
+
+                    await _s3Client.PutBucketAsync(createRequest).ConfigureAwait(false);
+                }
+
+                return generatedName;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "Textract reported unsupported PDF/TIFF format for AnalyzeDocument(Bytes). " +
+                    "Async fallback requires S3. Set AWS_TEXTRACT_S3_BUCKET to an existing bucket " +
+                    "(same region as AWS_REGION) or grant permissions to create/use bucket '" + generatedName + "'.",
+                    ex);
+            }
+        }
+
+        private string GenerateDefaultBucketName()
+        {
+            var sanitizedKey = (_accessKey ?? string.Empty).ToLowerInvariant();
+            if (sanitizedKey.Length > 12)
+            {
+                sanitizedKey = sanitizedKey.Substring(sanitizedKey.Length - 12);
+            }
+
+            var seed = string.IsNullOrWhiteSpace(sanitizedKey) ? Guid.NewGuid().ToString("N") : sanitizedKey;
+            var sb = new StringBuilder();
+            foreach (var ch in seed)
+            {
+                if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+                {
+                    sb.Append(ch);
+                }
+            }
+
+            var suffix = sb.ToString();
+            if (suffix.Length < 8)
+            {
+                suffix = (suffix + Guid.NewGuid().ToString("N")).Substring(0, 8);
+            }
+
+            return $"supplier-statement-textract-{_regionSystemName}-{suffix}";
+        }
+
+        private async Task<AnalyzeDocumentResponse> AnalyzeViaStartDocumentAnalysisAsync(string filePath, string bucketName)
         {
             var objectKey = $"textract-input/{Guid.NewGuid():N}_{Path.GetFileName(filePath)}";
             try
             {
                 await _s3Client.PutObjectAsync(new PutObjectRequest
                 {
-                    BucketName = _fallbackBucket,
+                    BucketName = bucketName,
                     Key = objectKey,
                     FilePath = filePath
                 }).ConfigureAwait(false);
@@ -122,7 +183,7 @@ namespace SupplierStatementConsole.Services
                     {
                         S3Object = new Amazon.Textract.Model.S3Object
                         {
-                            Bucket = _fallbackBucket,
+                            Bucket = bucketName,
                             Name = objectKey
                         }
                     }
@@ -181,7 +242,7 @@ namespace SupplierStatementConsole.Services
             {
                 try
                 {
-                    await _s3Client.DeleteObjectAsync(_fallbackBucket, objectKey).ConfigureAwait(false);
+                    await _s3Client.DeleteObjectAsync(bucketName, objectKey).ConfigureAwait(false);
                 }
                 catch
                 {

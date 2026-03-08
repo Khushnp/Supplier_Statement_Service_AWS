@@ -22,7 +22,7 @@ Set environment variables before running:
 - `AWS_ACCESS_KEY`
 - `AWS_SECRET_KEY`
 - `AWS_REGION`
-- `AWS_TEXTRACT_S3_BUCKET` (optional, but required for PDF/TIFF async fallback when sync bytes call is unsupported)
+- `AWS_TEXTRACT_S3_BUCKET` (optional; if omitted, app attempts to auto-create and use a regional fallback bucket for unsupported PDF/TIFF)
 
 ## Project structure
 - `Program.cs` - Console workflow and output handling.
