@@ -23,7 +23,7 @@ namespace SupplierStatementConsole.Services
             _parser = parser;
         }
 
-        public async Task<SupplierStatement> ProcessAsync(string inputPath)
+        public async Task<ProcessingResult> ProcessAsync(string inputPath)
         {
             var extension = Path.GetExtension(inputPath);
             var tempFiles = new List<string>();
@@ -47,7 +47,13 @@ namespace SupplierStatementConsole.Services
                 }
 
                 var response = await _textractService.AnalyzeDocumentAsync(processingPath).ConfigureAwait(false);
-                return _parser.Parse(response);
+                var parsed = _parser.Parse(response);
+
+                return new ProcessingResult
+                {
+                    ParsedStatement = parsed,
+                    RawTextractResponse = response
+                };
             }
             finally
             {

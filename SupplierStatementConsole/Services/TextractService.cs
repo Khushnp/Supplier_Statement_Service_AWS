@@ -15,6 +15,8 @@ namespace SupplierStatementConsole.Services
 {
     public class TextractService
     {
+        private const string DefaultRegionSystemName = "eu-west-2";
+
         private readonly AmazonTextractClient _client;
         private readonly AmazonS3Client _s3Client;
         private readonly string _configuredFallbackBucket;
@@ -27,17 +29,19 @@ namespace SupplierStatementConsole.Services
             var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_KEY");
             var region = Environment.GetEnvironmentVariable("AWS_REGION");
 
-            if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey) || string.IsNullOrWhiteSpace(region))
+            if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
             {
-                throw new InvalidOperationException("AWS credentials are missing. Set AWS_ACCESS_KEY, AWS_SECRET_KEY, and AWS_REGION.");
+                throw new InvalidOperationException("AWS credentials are missing. Set AWS_ACCESS_KEY and AWS_SECRET_KEY.");
             }
 
+            var effectiveRegion = string.IsNullOrWhiteSpace(region) ? DefaultRegionSystemName : region;
+
             var credentials = new BasicAWSCredentials(accessKey, secretKey);
-            var regionEndpoint = RegionEndpoint.GetBySystemName(region);
+            var regionEndpoint = RegionEndpoint.GetBySystemName(effectiveRegion);
             _client = new AmazonTextractClient(credentials, regionEndpoint);
             _s3Client = new AmazonS3Client(credentials, regionEndpoint);
             _configuredFallbackBucket = Environment.GetEnvironmentVariable("AWS_TEXTRACT_S3_BUCKET") ?? string.Empty;
-            _regionSystemName = region;
+            _regionSystemName = effectiveRegion;
             _accessKey = accessKey;
         }
 

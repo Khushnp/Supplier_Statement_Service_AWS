@@ -15,13 +15,15 @@ Production-ready C# console application targeting **.NET Framework 4.8** to extr
 4. Send image to AWS Textract (`AnalyzeDocument` with `TABLES` + `FORMS`).
 5. For PDF/TIFF, first try `AnalyzeDocument(Bytes)`; if unsupported, use async Textract analysis (`StartDocumentAnalysis` + polling) via S3 fallback.
 6. Parse extracted data into structured JSON.
-7. Print JSON to console and save `<inputfilename>.json` next to source file.
+7. Print parsed JSON to console and save two files next to source file:
+   - `<inputfilename>.json` (parsed supplier statement)
+   - `<inputfilename>.textract-raw.json` (full raw Textract analysis output)
 
 ## AWS configuration
 Set environment variables before running:
 - `AWS_ACCESS_KEY`
 - `AWS_SECRET_KEY`
-- `AWS_REGION`
+- `AWS_REGION` (optional; defaults to `eu-west-2`)
 - `AWS_TEXTRACT_S3_BUCKET` (optional; if omitted, app attempts to auto-create and use a regional fallback bucket for unsupported PDF/TIFF)
 
 ## Project structure

@@ -33,18 +33,23 @@ namespace SupplierStatementConsole
                 var processor = new FileProcessor(converter, textractService, parser);
 
                 var result = await processor.ProcessAsync(inputPath).ConfigureAwait(false);
-                var outputJson = JsonConvert.SerializeObject(result, Formatting.Indented);
+                var parsedOutputJson = JsonConvert.SerializeObject(result.ParsedStatement, Formatting.Indented);
+                var rawOutputJson = JsonConvert.SerializeObject(result.RawTextractResponse, Formatting.Indented);
 
                 Console.WriteLine();
                 Console.WriteLine("Extraction Result:");
-                Console.WriteLine(outputJson);
+                Console.WriteLine(parsedOutputJson);
 
-                var outputPath = Path.Combine(
-                    Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory,
-                    Path.GetFileNameWithoutExtension(inputPath) + ".json");
+                var outputDirectory = Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory;
+                var baseName = Path.GetFileNameWithoutExtension(inputPath);
+                var parsedOutputPath = Path.Combine(outputDirectory, baseName + ".json");
+                var rawOutputPath = Path.Combine(outputDirectory, baseName + ".textract-raw.json");
 
-                File.WriteAllText(outputPath, outputJson);
-                Console.WriteLine($"JSON saved to: {outputPath}");
+                File.WriteAllText(parsedOutputPath, parsedOutputJson);
+                File.WriteAllText(rawOutputPath, rawOutputJson);
+
+                Console.WriteLine($"Parsed JSON saved to: {parsedOutputPath}");
+                Console.WriteLine($"Raw Textract JSON saved to: {rawOutputPath}");
 
                 return 0;
             }
