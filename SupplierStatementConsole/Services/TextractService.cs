@@ -42,31 +42,30 @@ namespace SupplierStatementConsole.Services
                 throw new FileNotFoundException("Document file not found.", filePath);
             }
 
+            var extension = Path.GetExtension(filePath) ?? string.Empty;
+            var isPdfOrTiff = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)
+                              || extension.Equals(".tif", StringComparison.OrdinalIgnoreCase)
+                              || extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase);
+
             try
             {
-                var extension = Path.GetExtension(filePath) ?? string.Empty;
-                var isPdfOrTiff = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)
-                                  || extension.Equals(".tif", StringComparison.OrdinalIgnoreCase)
-                                  || extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase);
-
-                // For many real-world PDFs, AnalyzeDocument(Bytes) can fail with
-                // UnsupportedDocumentException. Use async S3-based analysis for PDF/TIFF.
-                if (isPdfOrTiff)
+                // First attempt sync AnalyzeDocument(Bytes) for all formats.
+                // This keeps PDF/TIFF support working when the document is compatible
+                // and no S3 bucket is configured.
+                return await AnalyzeWithBytesAsync(filePath).ConfigureAwait(false);
+            }
+            catch (AmazonTextractException textractEx) when (isPdfOrTiff && IsUnsupportedDocumentError(textractEx))
+            {
+                // Only fallback to async S3-based flow for PDF/TIFF if we hit unsupported format.
+                if (string.IsNullOrWhiteSpace(_fallbackBucket))
                 {
-                    return await AnalyzeViaStartDocumentAnalysisAsync(filePath).ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        "Textract reported unsupported PDF/TIFF format for AnalyzeDocument(Bytes). " +
+                        "Set AWS_TEXTRACT_S3_BUCKET (same region as AWS_REGION) to enable async fallback via StartDocumentAnalysis.",
+                        textractEx);
                 }
 
-                var bytes = File.ReadAllBytes(filePath);
-                using (var stream = new MemoryStream(bytes))
-                {
-                    var request = new AnalyzeDocumentRequest
-                    {
-                        Document = new Document { Bytes = stream },
-                        FeatureTypes = new List<string> { "TABLES", "FORMS" }
-                    };
-
-                    return await _client.AnalyzeDocumentAsync(request).ConfigureAwait(false);
-                }
+                return await AnalyzeViaStartDocumentAnalysisAsync(filePath).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -74,14 +73,38 @@ namespace SupplierStatementConsole.Services
             }
         }
 
-        private async Task<AnalyzeDocumentResponse> AnalyzeViaStartDocumentAnalysisAsync(string filePath)
+        private async Task<AnalyzeDocumentResponse> AnalyzeWithBytesAsync(string filePath)
         {
-            if (string.IsNullOrWhiteSpace(_fallbackBucket))
+            var bytes = File.ReadAllBytes(filePath);
+            using (var stream = new MemoryStream(bytes))
             {
-                throw new InvalidOperationException(
-                    "PDF/TIFF processing requires async Textract flow. Set AWS_TEXTRACT_S3_BUCKET to an S3 bucket name in the same AWS region.");
+                var request = new AnalyzeDocumentRequest
+                {
+                    Document = new Document { Bytes = stream },
+                    FeatureTypes = new List<string> { "TABLES", "FORMS" }
+                };
+
+                return await _client.AnalyzeDocumentAsync(request).ConfigureAwait(false);
+            }
+        }
+
+        private static bool IsUnsupportedDocumentError(AmazonTextractException ex)
+        {
+            if (ex == null)
+            {
+                return false;
             }
 
+            if (string.Equals(ex.ErrorCode, "UnsupportedDocumentException", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return (ex.Message ?? string.Empty).IndexOf("unsupported document format", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private async Task<AnalyzeDocumentResponse> AnalyzeViaStartDocumentAnalysisAsync(string filePath)
+        {
             var objectKey = $"textract-input/{Guid.NewGuid():N}_{Path.GetFileName(filePath)}";
             try
             {
@@ -125,7 +148,6 @@ namespace SupplierStatementConsole.Services
 
                     if (getResponse.JobStatus == JobStatus.PARTIAL_SUCCESS)
                     {
-                        // Keep whatever was processed and continue pagination when available.
                         allBlocks.AddRange(getResponse.Blocks);
                         if (string.IsNullOrWhiteSpace(getResponse.NextToken))
                         {
